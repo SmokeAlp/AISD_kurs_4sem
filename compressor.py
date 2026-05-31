@@ -251,6 +251,11 @@ def build_canonical_huffman_from_channel_data(channel_2d, q_table):
 
     return dc_encode, ac_encode
 
+def convert_1bit_to_8bit(bit_data, width, height):
+    bits = np.unpackbits(np.frombuffer(bit_data, dtype=np.uint8))
+    bits = bits[:width * height]
+    return (bits * 255).reshape((height, width)).astype(np.uint8)
+
 class JPEGCompressor:
     def __init__(self, quality=50):
         self.quality = quality
@@ -293,8 +298,33 @@ class JPEGCompressor:
                 ac_tables = {0: self.ac_lum_huff, 1: self.ac_chrom_huff}
                 huff_ids = [(0, 0, 0), (1, 1, 1), (1, 1, 1)]
 
-        elif img_type in (0x01, 0x02):
+        elif img_type == 0x02:
+            expected_size = width * height
+            if len(img_data) != expected_size:
+                print(f"Предупреждение: ожидалось {expected_size} байт, получено {len(img_data)} байт")
             img = np.frombuffer(img_data, dtype=np.uint8).reshape((height, width))
+            channels = [img]
+            q_tables = [self.qt_lum]
+            q_table_dict = {0: self.qt_lum}
+
+            if use_canonical:
+                dc_tables = {}
+                ac_tables = {}
+                dc_huff, ac_huff = build_canonical_huffman_from_channel_data(img, self.qt_lum)
+                dc_tables[0] = dc_huff
+                ac_tables[0] = ac_huff
+                huff_ids = [(0, 0, 0)]
+            else:
+                dc_tables = {0: self.dc_lum_huff}
+                ac_tables = {0: self.ac_lum_huff}
+                huff_ids = [(0, 0, 0)]
+
+        elif img_type == 0x01:
+            expected_bits = width * height
+            expected_bytes = (expected_bits + 7) // 8
+            if len(img_data) != expected_bytes:
+                print(f"Предупреждение: ожидалось {expected_bytes} байт, получено {len(img_data)} байт")
+            img = convert_1bit_to_8bit(img_data, width, height)
             channels = [img]
             q_tables = [self.qt_lum]
             q_table_dict = {0: self.qt_lum}
@@ -364,64 +394,58 @@ class JPEGCompressor:
             rgb = ycbcr_to_rgb(ycbcr)
             return np.clip(rgb, 0, 255).astype(np.uint8)
 
-
 def run_tests():
     test_dir = Path("Тестовые данные")
     out_dir = Path("Декомпрессия")
-
     raw_files = [
         "RAW_lena.raw",
         "RAW_color.raw",
         "RAW_gray.raw",
         "RAW_bw_nodith.raw",
         "RAW_bw_dith.raw"
-        ]
-    qualities = range(10, 91, 10)
-
+    ]
+    qualities = range(10, 91, 40)
     modes = [('static', False), ('canonical', True)]
-    sizes_static = []
+    static_sizes_dict = {}
+
     for mode_name, use_canonical in modes:
-        start_time = time.time()
         print(f"\n---Тестирование в режиме: {mode_name}")
-        for i, raw_file in enumerate(raw_files):
+        for raw_file in raw_files:
             raw_path = test_dir / raw_file
             if not raw_path.exists():
                 print(f"Файл {raw_path} не найден, пропускаем")
                 continue
-
             print(f"\nОбработка {raw_path.name}")
             sizes = []
-
+            mode_dir = out_dir / mode_name
             for q in qualities:
                 compressor = JPEGCompressor(quality=q)
-                mode_dir = out_dir / mode_name
                 jcpg_path = mode_dir / f"{raw_path.stem}_q{q}.jcpg"
-
-                compressor.compress_raw(raw_path, jcpg_path, use_canonical=use_canonical)
+                compressor.compress_raw(raw_path, jcpg_path, use_canonical)
                 size = jcpg_path.stat().st_size
                 sizes.append(size)
-                print(f"->Quality {q}: {size:,} байт")
-
+                print(f"-->Quality {q}: {size:,} байт")
                 img = compressor.decompress_to_image(jcpg_path)
                 if img.ndim == 2:
                     pil_img = Image.fromarray(img, 'L')
                 else:
                     pil_img = Image.fromarray(img, 'RGB')
                 pil_img.save(mode_dir / f"{raw_path.stem}_decompressed_{q}.jpg")
+
             if use_canonical:
-                plt.figure()
-                plt.plot(qualities, sizes_static[i], marker='o', label='Статические')
-                plt.plot(qualities, sizes, marker='o', label='Канонические')
-                plt.title(f"{raw_file} – зависимость размера от качества")
-                plt.xlabel("Quality")
-                plt.ylabel("Размер файла (байт)")
-                plt.grid(True)
-                plt.legend()
-                plt.savefig(out_dir / f"{raw_path.stem}_graph.jpg")
-                plt.close()
+                if raw_file in static_sizes_dict:
+                    plt.figure(figsize=(10, 6))
+                    plt.plot(qualities, static_sizes_dict[raw_file], marker='o', label='Статические коды')
+                    plt.plot(qualities, sizes, marker='s', label='Канонические коды')
+                    plt.title(f"{raw_file} – зависимость размера от качества", fontsize=14)
+                    plt.xlabel("Quality", fontsize=12)
+                    plt.ylabel("Размер файла (байт)", fontsize=12)
+                    plt.grid(True, alpha=0.3)
+                    plt.legend(fontsize=12)
+                    plt.tight_layout()
+                    plt.savefig(out_dir / f"{raw_path.stem}_graph.jpg", dpi=150)
+                    plt.close()
             else:
-                sizes_static.append(sizes)
-        end_time = time.time()
-        print(f"Время, затраченное на обработку изображений в режиме {mode_name}: {end_time - start_time}")
+                static_sizes_dict[raw_file] = sizes
 
 run_tests()

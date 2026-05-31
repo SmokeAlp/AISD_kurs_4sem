@@ -6,11 +6,11 @@ def convert(input_path, output_path, type, colorspace="RGB"):
         width, height = img.size
 
         if type == 'bw_nodith':
-            converted = img.convert('1', dither=Image.Dither.NONE).convert('L')
+            converted = img.convert('1', dither=Image.Dither.NONE)
             img_type = 0x01
             colorspace_id = 0x00
         elif type == 'bw_dith':
-            converted = img.convert('1').convert('L')
+            converted = img.convert('1')
             img_type = 0x01
             colorspace_id = 0x00
         elif type == 'gray':
